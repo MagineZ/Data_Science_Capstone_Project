@@ -1,0 +1,178 @@
+---
+title: "Capstone Milestone Report"
+author: "Pei-Chun Su"
+date: "2016¦~3¤ë19¤é"
+output: html_document
+---
+##Intent:  
+The goal of this project is just to display that I¡¦ve gotten used to working with the data and that I am on track to create my prediction algorithm.  
+
+##Download Data
+```{r,cache=TRUE}
+URL <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+
+if (!file.exists("en_US.blogs.txt")){
+        download.file(url = URL, "Coursera-SwiftKey.zip", mode = "wb")
+        unzip("Coursera-SwiftKey.zip")
+}
+```
+
+##Library
+```{r,cache=TRUE}
+suppressMessages(library(LaF)) # to read large files as ASCII & sample while reading. Enhanced performance over `readLines`
+suppressMessages(library(tm)) # for text mining and corpus operations
+suppressMessages(library(SnowballC)) # for stemming root words
+suppressMessages(library(ggplot2)) # for plotting
+suppressMessages(library(RWeka)) # for tokenization. Need 64 bit java installed in you have a 64 bit machine.
+suppressMessages(library(quanteda)) # for word frequency and sparsity exploratory analysis
+suppressMessages(library(wordcloud)) # for additional exploratory analysis
+suppressMessages(library(tau)) # Quick identification of n-words that frequent together.
+suppressMessages(library(dplyr)) # for text cleaning and other mutations if needed
+library(RColorBrewer) # to add a bit of color to life
+```
+
+##Read Data
+```{r,cache=TRUE}
+blogs <- readLines("en_US.blogs.txt", encoding = "UTF-8") # read complete blogs file
+twitter <- readLines("en_US.twitter.txt", encoding = "UTF-8", skipNul=TRUE) # read twitter file
+con <- file("en_US.news.txt", "rb") # connection needed because otherwise due to imcomplete final line (?), the file is not read completely
+news <- readLines(con, encoding = "UTF-8") # read complete news file. 
+news<- iconv(news, "UTF-8", "ascii", sub = " ")
+close(con); rm(con)
+```
+
+##Exploratory Analysis 1:
+```{r,cache=TRUE}
+file.size("en_US.blogs.txt")
+length(blogs) # no of lines in the file
+
+file.size("en_US.news.txt")
+length(news) # no of lines in the file
+
+file.size("en_US.twitter.txt")
+length(twitter) # no of lines in the file
+
+summary(nchar(blogs))[6] # max characters in a line of the file
+summary(nchar(news))[6] # max characters in a line of the file
+summary(nchar(twitter))[6] # max characters in a line of the file
+```
+##Sampling & Prediction Approach
+Since working with such huge data sets is memory intensive, I used random sampling for now to explore the data. Sampling is performed. 10000 lines per file is randomly sampled and saved to disk.
+
+```{r,cache=TRUE}
+set.seed(39)
+sampleTwitter <- twitter[sample(1:length(twitter),10000)]
+sampleNews <- news[sample(1:length(news),10000)]
+sampleBlogs <- blogs[sample(1:length(blogs),10000)]
+sampleData <- c(sampleTwitter,sampleNews,sampleBlogs)
+writeLines(sampleData, "./sample/sampleData.txt")
+
+# remove temporary variables
+rm(twitter,news,blogs,sampleTwitter,sampleNews,sampleBlogs,sampleData)
+```
+
+##Create and Clean Corpus
+Using the tm package, the sampled data is used to create a corpus. Subsequently, the the following transformations are performed:  
+* convert to lowercase  
+* characters /, @ |  
+* common punctuation  
+* numbers  
+* English stop words  
+* strip whitespace  
+* stemming (Porter¡¦s stemming)  
+
+```{r,cache=TRUE}
+cname <- file.path(".", "Corpus")
+docs <- Corpus(DirSource(cname))
+
+# convert to lowercase
+docs <- tm_map(docs, content_transformer(tolower))
+
+# remove more transforms
+toSpace <- content_transformer(function(x, pattern) gsub(pattern, " ", x))
+docs <- tm_map(docs, toSpace, "/|@|\\|")
+
+# remove punctuation
+docs <- tm_map(docs, removePunctuation)
+
+# remove numbers
+docs <- tm_map(docs, removeNumbers)
+
+# strip whitespace
+docs <- tm_map(docs, stripWhitespace)
+
+# remove english stop words
+docs <- tm_map(docs, removeWords, stopwords("english"))
+
+# initiate stemming
+docs <- tm_map(docs, stemDocument)
+```
+
+##Ngram Tokenization
+N-grams models are created to explore word frequencies. Using the RWeka package, unigrams, bigrams and trigrams are created. 
+```{r}
+library(rJava)
+options( java.parameters = "-Xmx2g" )
+Tokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+unidtm <- DocumentTermMatrix(docs, 
+                          control = list(tokenize = Tokenizer))
+
+BigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 2, max = 2))
+bidtm <- DocumentTermMatrix(docs, 
+                             control = list(tokenize = BigramTokenizer))
+
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+tridtm <- DocumentTermMatrix(docs, 
+                             control = list(tokenize = TrigramTokenizer))
+```
+##Exploratory Analysis 2
+###Top 10 Frequencies
+Below, you can see the top 10 unigrams with the highest frequencies.
+```{r}
+tm_unifreq <- sort(colSums(as.matrix(unidtm)), decreasing=TRUE)
+tm_uniwordfreq <- data.frame(word=names(tm_unifreq), freq=tm_unifreq)
+paste("Unigrams - Top 5 highest frequencies")
+head(tm_uniwordfreq,5)
+tm_bifreq <- sort(colSums(as.matrix(bidtm)), decreasing=TRUE)
+tm_biwordfreq <- data.frame(word=names(tm_bifreq), freq=tm_bifreq)
+paste("Bigrams - Top 5 highest frequencies")
+head(tm_biwordfreq,5)
+tm_trifreq <- sort(colSums(as.matrix(tridtm)), decreasing=TRUE)
+tm_triwordfreq <- data.frame(word=names(tm_trifreq), freq=tm_trifreq)
+paste("Trigrams - Top 5 highest frequencies")
+head(tm_triwordfreq,5)
+```
+##Explore Frequencies
+In the diagrams below, you can explore the Ngrams by frequencies:
+```{r}
+tm_uniwordfreq %>% 
+    filter(freq > 500) %>%
+    ggplot(aes(word,freq)) +
+    geom_bar(stat="identity") +
+    ggtitle("Unigrams with frequencies > 500") +
+    xlab("Unigrams") + ylab("Frequency") +
+    theme(axis.text.x=element_text(angle=45, hjust=1))
+
+tm_biwordfreq %>% 
+    filter(freq > 50) %>%
+    ggplot(aes(word,freq)) +
+    geom_bar(stat="identity") +
+    ggtitle("Bigrams with frequencies > 50") +
+    xlab("Bigrams") + ylab("Frequency") +
+    theme(axis.text.x=element_text(angle=45, hjust=1))
+
+tm_triwordfreq %>% 
+    filter(freq > 5) %>%
+    ggplot(aes(word,freq)) +
+    geom_bar(stat="identity") +
+    ggtitle("Trigrams with frequencies > 5") +
+    xlab("Trigrams") + ylab("Frequency") +
+    theme(axis.text.x=element_text(angle=45, hjust=1))
+```
+##Wordcloud - Top 50 Unigrams
+```{r}
+set.seed(39)
+wordcloud(names(tm_unifreq), tm_unifreq, max.words=50, scale=c(3, .1), colors=brewer.pal(6, "Dark2"))
+wordcloud(names(tm_bifreq), tm_bifreq, max.words=50, scale=c(3, .1), colors=brewer.pal(6, "Dark2"))
+wordcloud(names(tm_trifreq), tm_trifreq, max.words=50, scale=c(2, .1), colors=brewer.pal(6, "Dark2"))
+```
